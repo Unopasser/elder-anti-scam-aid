@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>SIM 卡</title>
+<style>
+  /* ========== 基础 ========== */
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%;
+    font-family: -apple-system, "Roboto", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #000;
+    color: #fff;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ========== 场景层：所有状态共用一个全屏容器 ========== */
+  .scene {
+    position: fixed; inset: 0;
+    display: none;
+    align-items: center; justify-content: center;
+    flex-direction: column;
+  }
+  .scene.active { display: flex; }
+
+  /* 仿熄屏/锁屏暗色背景 */
+  #bg {
+    position: fixed; inset: 0; z-index: 0;
+    background: radial-gradient(ellipse at 50% 30%, #2a2d34 0%, #14161a 55%, #000 100%);
+  }
+
+  /* ========== 1. 过渡层：正在检查 SIM 卡 ========== */
+  #scene-boot { z-index: 10; cursor: pointer; }
+  .boot-spinner {
+    width: 42px; height: 42px; margin-bottom: 22px;
+    border: 3px solid rgba(255,255,255,.18);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .boot-text { font-size: 15px; color: rgba(255,255,255,.75); letter-spacing: .5px; }
+  .boot-hint { font-size: 12px; color: rgba(255,255,255,.35); margin-top: 14px; }
+
+  /* ========== 2. 仿 AOSP 系统 PIN 弹窗 ========== */
+  #scene-pin { z-index: 20; }
+  .pin-scrim {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,.72);
+  }
+  .dlg {
+    position: relative;
+    width: min(86vw, 320px);
+    background: #fff;
+    border-radius: 24px;
+    padding: 24px 24px 12px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.5);
+    color: #1c1b1f;
+  }
+  .dlg-title {
+    font-size: 20px; font-weight: 500; line-height: 1.35;
+    text-align: center;
+  }
+  .dlg-sub {
+    font-size: 14px; color: #49454f;
+    text-align: center; margin-top: 10px; line-height: 1.5;
+  }
+  .pin-field {
+    margin: 20px auto 6px;
+    width: 200px;
+  }
+  .pin-input {
+    width: 100%;
+    padding: 10px 8px;
+    font-size: 22px;
+    letter-spacing: 10px;
+    text-align: center;
+    border: none;
+    border-bottom: 2px solid #79747e;
+    outline: none;
+    background: transparent;
+    color: #1c1b1f;
+    caret-color: #0b57d0;
+    border-radius: 0;
+  }
+  .pin-input:focus { border-bottom-color: #0b57d0; }
+  /* 用 text-security 显示圆点，type=text + 过滤数字，规避部分浏览器 password 自动填充弹层穿帮 */
+  .pin-input { -webkit-text-security: disc; }
+  @supports not (-webkit-text-security: disc) {
+    .pin-input { font-family: "bulletfont", monospace; }
+  }
+  .pin-input.wrong { border-bottom-color: #b3261e; }
+  .dlg-error {
+    min-height: 18px;
+    font-size: 12px; color: #b3261e;
+    text-align: center; margin-top: 6px;
+    opacity: 0; transition: opacity .15s;
+  }
+  .dlg-error.show { opacity: 1; }
+  .dlg.shake { animation: shake .4s; }
+  @keyframes shake {
+    0%,100% { transform: translateX(0); }
+    20%,60% { transform: translateX(-8px); }
+    40%,80% { transform: translateX(8px); }
+  }
+  .dlg-actions {
+    display: flex; justify-content: flex-end; gap: 4px;
+    margin-top: 10px;
+  }
+  .dlg-btn {
+    appearance: none; border: none; background: transparent;
+    color: #0b57d0;
+    font-size: 14px; font-weight: 500;
+    padding: 10px 14px;
+    border-radius: 20px;
+    cursor: pointer;
+  }
+  .dlg-btn:active { background: rgba(11,87,208,.08); }
+
+  /* ========== 3. 加载层：正在验证 ========== */
+  #scene-loading { z-index: 30; background: rgba(0,0,0,.72); }
+  .verify-spinner {
+    width: 54px; height: 54px;
+    border: 4px solid rgba(255,255,255,.15);
+    border-top-color: #4c8df6;
+    border-radius: 50%;
+    animation: spin .9s linear infinite;
+    margin-bottom: 26px;
+  }
+  .verify-text { font-size: 16px; color: rgba(255,255,255,.85); }
+  .verify-sub { font-size: 12px; color: rgba(255,255,255,.4); margin-top: 12px; }
+
+  /* ========== 4. 成功闪现层 ========== */
+  #scene-ok { z-index: 40; background: rgba(0,0,0,.72); }
+  .ok-circle {
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    background: #34a853;
+    display: flex; align-items: center; justify-content: center;
+    animation: pop .35s cubic-bezier(.2,1.4,.4,1);
+  }
+  .ok-circle svg { width: 38px; height: 38px; }
+  @keyframes pop { from { transform: scale(.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .ok-text { margin-top: 20px; font-size: 16px; color: rgba(255,255,255,.9); }
+
+  /* ========== 5. 揭晓层（合规收尾） ========== */
+  #scene-reveal { z-index: 50; background: linear-gradient(180deg, #1a2233 0%, #0d1017 100%); text-align: center; padding: 0 28px; }
+  .reveal-emoji { font-size: 64px; line-height: 1; animation: pop .5s cubic-bezier(.2,1.4,.4,1); }
+  .reveal-title { font-size: 26px; font-weight: 700; margin-top: 22px; }
+  .reveal-body {
+    font-size: 15px; line-height: 1.8; color: rgba(255,255,255,.72);
+    margin-top: 18px; max-width: 420px;
+  }
+  .reveal-safe {
+    margin-top: 26px;
+    font-size: 12.5px; line-height: 1.7;
+    color: rgba(255,255,255,.45);
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 12px;
+    padding: 12px 16px;
+    max-width: 420px;
+  }
+  .reveal-footer {
+    margin-top: 28px;
+    font-size: 12px;
+    color: rgba(255,255,255,.3);
+    letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+
+<div id="bg"></div>
+
+<!-- 1. 过渡层 -->
+<div class="scene active" id="scene-boot">
+  <div class="boot-spinner"></div>
+  <div class="boot-text" id="bootText">正在检查 SIM 卡状态…</div>
+  <div class="boot-hint">轻触屏幕继续</div>
+</div>
+
+<!-- 2. PIN 弹窗 -->
+<div class="scene" id="scene-pin">
+  <div class="pin-scrim"></div>
+  <div class="dlg" id="dlg" role="dialog" aria-modal="true">
+    <div class="dlg-title" id="dlgTitle">SIM 卡 PIN 码</div>
+    <div class="dlg-sub" id="dlgSub">请输入 SIM 卡 PIN 码以解锁</div>
+    <div class="pin-field">
+      <input class="pin-input" id="pinInput" type="text" inputmode="numeric" autocomplete="off"
+             maxlength="6" aria-label="PIN 码">
+    </div>
+    <div class="dlg-error" id="dlgError">PIN 码不正确，请重试</div>
+    <div class="dlg-actions">
+      <button class="dlg-btn" id="btnCancel">取消</button>
+      <button class="dlg-btn" id="btnOk">解锁</button>
+    </div>
+  </div>
+</div>
+
+<!-- 3. 加载层 -->
+<div class="scene" id="scene-loading">
+  <div class="verify-spinner"></div>
+  <div class="verify-text" id="verifyText">正在验证，请稍候…</div>
+  <div class="verify-sub">请勿关闭此页面</div>
+</div>
+
+<!-- 4. 成功闪现 -->
+<div class="scene" id="scene-ok">
+  <div class="ok-circle">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M5 12.5 10 17.5 19 7" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </div>
+  <div class="ok-text">验证成功</div>
+</div>
+
+<!-- 5. 揭晓层 -->
+<div class="scene" id="scene-reveal">
+  <div class="reveal-emoji">🎉</div>
+  <div class="reveal-title" id="revealTitle">整蛊成功！</div>
+  <div class="reveal-body" id="revealBody">刚才的「SIM 卡 PIN 码验证」是个整蛊页面，并没有真的读取你的 SIM 卡——任意 6 位数字都能通过。</div>
+  <div class="reveal-safe">
+    安全声明：本页面是「非礼勿视α」反诈教具的演示流程。它没有读取你的 SIM 卡或任何设备信息；你输入的内容只在浏览器里用于流程判断，没有被记录、存储或发送到任何地方，页面也没有任何网络请求。真正的恶意页面，不会像这样主动告诉你真相。
+  </div>
+  <div class="reveal-footer">非礼勿视α · 助老反诈教具</div>
+</div>
+
+<script src="config.js"></script>
+<script>
+"use strict";
+
+/* ===================== 配置：URL 参数优先，回退 config.js ===================== */
+var DEFAULTS = {
+  t:  "SIM 卡 PIN 码",              // 弹窗标题
+  s:  "请输入 SIM 卡 PIN 码以解锁",  // 弹窗副标题
+  t2: "验证超时，请再次输入",        // 第二次弹窗标题
+  lt: "正在验证，请稍候…",           // 加载文案
+  sec: 10,                          // 加载秒数
+  ot: "你以为只是被整蛊了",          // 揭晓标题
+  os: "实际上你被『硬控』了 30 秒，期间你的设备正面临风险——请勿随意扫码。" // 揭晓说明
+};
+function getCfg() {
+  var cfg = {}, base = (window.SIM_CONFIG || {});
+  for (var k in DEFAULTS) cfg[k] = (base[k] !== undefined ? base[k] : DEFAULTS[k]);
+  if (location.search.length > 1) {
+    var q = new URLSearchParams(location.search);
+    if (q.get("t"))  cfg.t  = q.get("t");
+    if (q.get("s"))  cfg.s  = q.get("s");
+    if (q.get("t2")) cfg.t2 = q.get("t2");
+    if (q.get("lt")) cfg.lt = q.get("lt");
+    if (q.get("sec")) { var n = parseInt(q.get("sec"), 10); if (n >= 3 && n <= 60) cfg.sec = n; }
+    if (q.get("ot")) cfg.ot = q.get("ot");
+    if (q.get("os")) cfg.os = q.get("os");
+  }
+  return cfg;
+}
+var CFG = getCfg();
+
+/* ===================== 元素引用 ===================== */
+var $ = function (id) { return document.getElementById(id); };
+var scenes = { boot: $("scene-boot"), pin: $("scene-pin"), loading: $("scene-loading"), ok: $("scene-ok"), reveal: $("scene-reveal") };
+var dlgTitle = $("dlgTitle"), dlgSub = $("dlgSub"), dlgError = $("dlgError");
+var dlg = $("dlg"), pinInput = $("pinInput");
+var btnOk = $("btnOk"), btnCancel = $("btnCancel");
+
+function show(name) {
+  for (var k in scenes) scenes[k].classList.remove("active");
+  scenes[name].classList.add("active");
+}
+
+/* ===================== 全屏（需用户手势触发；Esc/系统手势可随时退出） ===================== */
+function goFullscreen() {
+  var el = document.documentElement;
+  var fn = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (fn && !document.fullscreenElement && !document.webkitFullscreenElement) {
+    try { fn.call(el); } catch (e) { /* 部分浏览器限制，降级为普通覆盖层 */ }
+  }
+}
+
+/* ===================== 返回键拦截（仅页内：返回停留在本页；揭晓后放行） ===================== */
+var flowDone = false;
+function pushGuard() { history.pushState({ guard: true }, "", location.href); }
+function startBackGuard() {
+  pushGuard(); pushGuard(); pushGuard();
+  window.addEventListener("popstate", function () {
+    if (!flowDone) pushGuard();
+  });
+}
+
+/* ===================== 状态机 ===================== */
+var stage = "boot"; // boot | pin1 | loading | pin2 | done
+
+$("bootText").textContent = "正在检查 SIM 卡状态…";
+scenes.boot.addEventListener("click", function () {
+  if (stage !== "boot") return;
+  goFullscreen();
+  startBackGuard();
+  openPin("pin1");
+});
+
+function openPin(which) {
+  stage = which;
+  if (which === "pin2") {
+    dlgTitle.textContent = CFG.t2;
+    dlgSub.textContent = "请再次输入 SIM 卡 PIN 码以完成验证";
+  } else {
+    dlgTitle.textContent = CFG.t;
+    dlgSub.textContent = CFG.s;
+  }
+  dlgError.classList.remove("show");
+  pinInput.value = "";
+  pinInput.classList.remove("wrong");
+  show("pin");
+  setTimeout(function () { pinInput.focus(); }, 250);
+}
+
+/* 输入过滤：仅数字，最多 6 位（不保存、不外发，仅用于判断位数） */
+pinInput.addEventListener("input", function () {
+  var v = pinInput.value.replace(/\D/g, "").slice(0, 6);
+  pinInput.value = v;
+  pinInput.classList.remove("wrong");
+  dlgError.classList.remove("show");
+});
+pinInput.addEventListener("keydown", function (e) {
+  if (e.key === "Enter") btnOk.click();
+});
+
+function rejectPin() {
+  pinInput.classList.add("wrong");
+  dlgError.classList.add("show");
+  dlg.classList.remove("shake");
+  void dlg.offsetWidth; // 重置动画
+  dlg.classList.add("shake");
+  pinInput.value = "";
+}
+
+btnOk.addEventListener("click", function () {
+  var v = pinInput.value;
+  if (v.length !== 6) { rejectPin(); return; }
+  /* 任意 6 位数字均通过；校验后立即丢弃输入，不留存 */
+  pinInput.value = "";
+  if (stage === "pin1") startLoading();
+  else if (stage === "pin2") finish();
+});
+
+btnCancel.addEventListener("click", function () {
+  /* 不关闭弹窗：清空输入并重新提示（保留整蛊错觉，但用户始终可按 Home 键离开） */
+  pinInput.value = "";
+  dlgSub.textContent = "SIM 卡已锁定，请输入 PIN 码";
+  dlgError.textContent = "必须验证 PIN 码后才能使用此设备";
+  dlgError.classList.add("show");
+});
+
+function startLoading() {
+  stage = "loading";
+  $("verifyText").textContent = CFG.lt;
+  show("loading");
+  setTimeout(function () { openPin("pin2"); }, CFG.sec * 1000);
+}
+
+function finish() {
+  stage = "done";
+  show("ok");
+  setTimeout(function () {
+    flowDone = true;
+    /* 揭晓即退出全屏，交还控制权 */
+    if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () {});
+    else if (document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen();
+    $("revealTitle").textContent = CFG.ot;
+    $("revealBody").textContent = CFG.os;
+    show("reveal");
+  }, 1400);
+}
+</script>
+</body>
+</html>
